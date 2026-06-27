@@ -1,0 +1,6 @@
+{
+  "name": "FormulaFlow IQ",
+  "description": "An intelligent Excel tool to parse sheets, suggest and execute financial and business formulas based on Urdu or English queries, and download standard report templates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
