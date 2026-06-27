@@ -20,8 +20,11 @@ import {
   Check,
   FileDown,
   ArrowRight,
+  ArrowLeft,
   Play,
-  AlertTriangle
+  AlertTriangle,
+  Undo,
+  Printer
 } from 'lucide-react';
 
 import { TEMPLATES, FORMULAS_LEARNING } from './templatesAndFormulas';
@@ -61,9 +64,65 @@ const SAMPLE_DATASETS = {
   }
 };
 
+const themeStyles = {
+  teal: {
+    primary: '#0d9488', // teal-600
+    primaryHover: '#0f766e',
+    light: '#f0fdfa',
+    lightBorder: '#ccfbf1',
+    lightText: '#0f766e',
+    gradientFrom: '#0d9488',
+    gradientTo: '#059669',
+    ring: 'rgba(13, 148, 136, 0.2)',
+  },
+  navy: {
+    primary: '#1e3a8a', // blue-800
+    primaryHover: '#172554',
+    light: '#eff6ff',
+    lightBorder: '#dbeafe',
+    lightText: '#1e3a8a',
+    gradientFrom: '#1e3a8a',
+    gradientTo: '#0f172a',
+    ring: 'rgba(30, 58, 138, 0.2)',
+  },
+  emerald: {
+    primary: '#047857', // emerald-700
+    primaryHover: '#065f46',
+    light: '#ecfdf5',
+    lightBorder: '#d1fae5',
+    lightText: '#047857',
+    gradientFrom: '#047857',
+    gradientTo: '#064e3b',
+    ring: 'rgba(4, 120, 87, 0.2)',
+  },
+  slate: {
+    primary: '#475569', // slate-600
+    primaryHover: '#334155',
+    light: '#f1f5f9',
+    lightBorder: '#e2e8f0',
+    lightText: '#475569',
+    gradientFrom: '#475569',
+    gradientTo: '#1e293b',
+    ring: 'rgba(71, 85, 105, 0.2)',
+  }
+};
+
+interface UndoState {
+  query: string;
+  analysisResult: AnalysisResponse | null;
+  previewValues: any[];
+  customColumnName: string;
+  computedSuccess: boolean;
+  uploadedSheet: ParsedSheet | null;
+}
+
 export default function App() {
   // Navigation / View Tabs
   const [activeTab, setActiveTab] = useState<'templates' | 'engine' | 'learning'>('engine');
+  const [themeId, setThemeId] = useState<'teal' | 'navy' | 'emerald' | 'slate'>('navy');
+
+  // --- STATE FOR UNDO HISTORY ---
+  const [undoStack, setUndoStack] = useState<UndoState[]>([]);
 
   // --- STATE FOR TEMPLATE TAB ---
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('inventory');
@@ -150,6 +209,217 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  // Print raw or processed spreadsheet data
+  const handlePrintData = () => {
+    if (!uploadedSheet) return;
+
+    // Create a hidden iframe for clean printing
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (!doc) {
+      alert('Could not initialize print document.');
+      return;
+    }
+
+    const headersHtml = uploadedSheet.headers.map((header, idx) => `
+      <th>
+        <div class="col-letter">${getColumnLetter(idx)}</div>
+        <div class="col-title">${header}</div>
+      </th>
+    `).join('') + (previewValues.length > 0 ? `
+      <th class="computed-col">
+        <div class="col-letter">${getColumnLetter(uploadedSheet.headers.length)}</div>
+        <div class="col-title">Calculated: ${customColumnName}</div>
+      </th>
+    ` : '');
+
+    const rowsHtml = uploadedSheet.rows.map((row, rIdx) => {
+      const cellHtml = uploadedSheet.headers.map(header => `
+        <td>${row[header] !== undefined && row[header] !== null ? String(row[header]) : ''}</td>
+      `).join('');
+
+      const computedCellHtml = previewValues.length > 0 ? `
+        <td class="computed-cell">${previewValues[rIdx] !== undefined && previewValues[rIdx] !== null ? String(previewValues[rIdx]) : ''}</td>
+      ` : '';
+
+      return `
+        <tr>
+          <td class="row-num">${rIdx + 2}</td>
+          ${cellHtml}
+          ${computedCellHtml}
+        </tr>
+      `;
+    }).join('');
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Spreadsheet Report - ${uploadedSheet.name || 'AI Processed Sheet'}</title>
+        <style>
+          body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #1e293b;
+            margin: 25px;
+            font-size: 11px;
+            line-height: 1.4;
+          }
+          .header {
+            margin-bottom: 20px;
+            border-bottom: 2px solid #cbd5e1;
+            padding-bottom: 15px;
+          }
+          .title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .meta {
+            font-size: 9px;
+            color: #64748b;
+            margin-top: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+          }
+          .meta-item {
+            background: #f1f5f9;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid #e2e8f0;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            page-break-inside: auto;
+            margin-top: 10px;
+          }
+          tr {
+            page-break-inside: avoid;
+            page-break-after: auto;
+          }
+          th, td {
+            border: 1px solid #cbd5e1;
+            padding: 7px 10px;
+            text-align: left;
+          }
+          th {
+            background-color: #f8fafc;
+            color: #334155;
+            font-weight: 600;
+            vertical-align: bottom;
+          }
+          .col-letter {
+            font-family: "JetBrains Mono", monospace;
+            font-size: 8px;
+            color: #94a3b8;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+          }
+          .col-title {
+            font-size: 10px;
+          }
+          .row-num {
+            background-color: #f8fafc;
+            color: #94a3b8;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 8px;
+            text-align: center;
+            width: 30px;
+            font-weight: 600;
+          }
+          .computed-col {
+            background-color: #f0fdf4 !important;
+            border-left: 2px solid #16a34a !important;
+            color: #14532d !important;
+          }
+          .computed-cell {
+            background-color: #f0fdf4/50;
+            border-left: 2px solid #16a34a !important;
+            font-weight: 600;
+            color: #15803d;
+          }
+          @media print {
+            body {
+              margin: 1.2cm;
+            }
+            @page {
+              size: auto;
+              margin: 1.5cm 1cm 1.5cm 1cm;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1 class="title">📄 Spreadsheet Report: ${uploadedSheet.name || 'AI Processed Sheet'}</h1>
+          <div class="meta">
+            <span class="meta-item"><strong>File:</strong> ${uploadedSheet.name}</span>
+            <span class="meta-item"><strong>Total Rows:</strong> ${uploadedSheet.rows.length}</span>
+            <span class="meta-item"><strong>Columns:</strong> ${uploadedSheet.headers.length + (previewValues.length > 0 ? 1 : 0)}</span>
+            <span class="meta-item"><strong>Printed On:</strong> ${new Date().toLocaleString()}</span>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 35px; text-align: center;"><div class="col-letter">#</div><div class="col-title">Row</div></th>
+              ${headersHtml}
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `;
+
+    doc.open();
+    doc.write(htmlContent);
+    doc.close();
+
+    // Give iframe slightly more time to ensure all rendering/fonts parse perfectly before print dialog pops
+    iframe.contentWindow?.focus();
+    setTimeout(() => {
+      iframe.contentWindow?.print();
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+      }, 1500);
+    }, 500);
+  };
+
+  // Undo previous calculation state
+  const handleUndo = () => {
+    if (undoStack.length === 0) return;
+    const nextStack = [...undoStack];
+    const previousState = nextStack.pop();
+    if (previousState) {
+      setQuery(previousState.query);
+      setAnalysisResult(previousState.analysisResult);
+      setPreviewValues(previousState.previewValues);
+      setCustomColumnName(previousState.customColumnName);
+      setComputedSuccess(previousState.computedSuccess);
+      if (previousState.uploadedSheet) {
+        setUploadedSheet(previousState.uploadedSheet);
+      }
+      setUndoStack(nextStack);
+    }
+  };
+
   // Drag and drop events for file uploads
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -190,6 +460,7 @@ export default function App() {
         setApiError(null);
         setCurrentPage(1);
         setComputedSuccess(false);
+        setUndoStack([]);
       } catch (err) {
         console.error("Error parsing Excel:", err);
         alert("Failed to parse Excel file. Please ensure it is a valid .xlsx or .xls document.");
@@ -234,6 +505,7 @@ export default function App() {
     setApiError(null);
     setCurrentPage(1);
     setComputedSuccess(false);
+    setUndoStack([]);
   };
 
   // Smart Validation File Upload (Tab 1)
@@ -275,6 +547,17 @@ export default function App() {
   // Query AI Formula Assistant
   const handleAnalyzeQuery = async () => {
     if (!query.trim() || !uploadedSheet) return;
+
+    // Save previous state to undo stack before running a new analysis
+    const previousState: UndoState = {
+      query,
+      analysisResult,
+      previewValues,
+      customColumnName,
+      computedSuccess,
+      uploadedSheet: uploadedSheet ? JSON.parse(JSON.stringify(uploadedSheet)) : null,
+    };
+    setUndoStack(prev => [...prev, previousState]);
 
     setIsAnalyzing(true);
     setApiError(null);
@@ -417,67 +700,96 @@ export default function App() {
   const totalPages = uploadedSheet ? Math.ceil(uploadedSheet.rows.length / rowsPerPage) : 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans antialiased flex flex-col selection:bg-teal-500/20 selection:text-teal-900">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans antialiased flex flex-col">
+      <style>{`
+        :root {
+          --theme-primary: ${themeStyles[themeId].primary};
+          --theme-primary-hover: ${themeStyles[themeId].primaryHover};
+          --theme-light: ${themeStyles[themeId].light};
+          --theme-light-border: ${themeStyles[themeId].lightBorder};
+          --theme-light-text: ${themeStyles[themeId].lightText};
+          --theme-gradient-from: ${themeStyles[themeId].gradientFrom};
+          --theme-gradient-to: ${themeStyles[themeId].gradientTo};
+          --theme-ring: ${themeStyles[themeId].ring};
+        }
+        ::selection {
+          background-color: ${themeStyles[themeId].ring} !important;
+        }
+        .bg-theme-primary { background-color: var(--theme-primary) !important; }
+        .hover-bg-theme-primary-hover:hover { background-color: var(--theme-primary-hover) !important; }
+        .text-theme-primary { color: var(--theme-primary) !important; }
+        .border-theme-primary { border-color: var(--theme-primary) !important; }
+        .bg-theme-light { background-color: var(--theme-light) !important; }
+        .border-theme-light { border-color: var(--theme-light) !important; }
+        .text-theme-light { color: var(--theme-light) !important; }
+        
+        .theme-gradient {
+          background: linear-gradient(135deg, var(--theme-gradient-from) 0%, var(--theme-gradient-to) 100%) !important;
+        }
+      `}</style>
       
       {/* HEADER SECTION */}
       <header className="bg-white border-b border-slate-200 py-6 px-6 sm:px-12 sticky top-0 z-30 shadow-xs">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
             <div className="flex items-center gap-2">
-              <span className="p-2 bg-teal-500 text-white rounded-lg shadow-sm">
+              <span className="p-2 bg-theme-primary text-white rounded-lg shadow-sm transition-colors duration-300">
                 <FileSpreadsheet className="w-6 h-6" />
               </span>
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
                 FormulaFlow IQ
               </h1>
             </div>
-            <p className="text-xs sm:text-sm text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+            <p className="text-xs sm:text-sm text-slate-500 sm:mt-1 flex items-center gap-1.5 flex-wrap">
               <span>آسان فارمولا اور آٹو کیلکولیٹر</span>
               <span className="text-slate-300">•</span>
               <span>Your Intelligent Spreadsheet Assistant</span>
             </p>
           </div>
 
-          {/* MAIN TABS SELECTOR */}
-          <div className="flex bg-slate-100 p-1 rounded-xl self-stretch md:self-auto border border-slate-200">
-            <button
-              id="tab-engine"
-              onClick={() => setActiveTab('engine')}
-              className={`flex-1 md:flex-none px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
-                activeTab === 'engine'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <Calculator className="w-4 h-4 text-teal-500" />
-              <span>AI Formula Engine</span>
-            </button>
+          {/* CONTROL WRAPPER FOR NAVIGATION */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
+            {/* MAIN TABS SELECTOR */}
+            <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <button
+                id="tab-engine"
+                onClick={() => setActiveTab('engine')}
+                className={`flex-1 md:flex-none px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+                  activeTab === 'engine'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Calculator className={`w-4 h-4 ${activeTab === 'engine' ? 'text-theme-primary' : 'text-slate-400'}`} />
+                <span>AI Formula Engine</span>
+              </button>
 
-            <button
-              id="tab-templates"
-              onClick={() => setActiveTab('templates')}
-              className={`flex-1 md:flex-none px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
-                activeTab === 'templates'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <Layers className="w-4 h-4 text-teal-500" />
-              <span>Report Templates</span>
-            </button>
+              <button
+                id="tab-templates"
+                onClick={() => setActiveTab('templates')}
+                className={`flex-1 md:flex-none px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+                  activeTab === 'templates'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Layers className={`w-4 h-4 ${activeTab === 'templates' ? 'text-theme-primary' : 'text-slate-400'}`} />
+                <span>Report Templates</span>
+              </button>
 
-            <button
-              id="tab-learning"
-              onClick={() => setActiveTab('learning')}
-              className={`flex-1 md:flex-none px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
-                activeTab === 'learning'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <BookOpen className="w-4 h-4 text-teal-500" />
-              <span>Formula Learning Hub</span>
-            </button>
+              <button
+                id="tab-learning"
+                onClick={() => setActiveTab('learning')}
+                className={`flex-1 md:flex-none px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+                  activeTab === 'learning'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <BookOpen className={`w-4 h-4 ${activeTab === 'learning' ? 'text-theme-primary' : 'text-slate-400'}`} />
+                <span>Formula Learning Hub</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -496,7 +808,7 @@ export default function App() {
               className="space-y-6"
             >
               {/* TOP HERO INSIGHT */}
-              <div className="bg-gradient-to-r from-teal-500 to-emerald-600 rounded-2xl p-6 sm:p-8 text-white shadow-md relative overflow-hidden">
+              <div className="theme-gradient rounded-2xl p-6 sm:p-8 text-white shadow-md relative overflow-hidden transition-all duration-300">
                 <div className="absolute right-0 bottom-0 opacity-10 transform translate-x-12 translate-y-12">
                   <Calculator className="w-64 h-64" />
                 </div>
@@ -610,6 +922,17 @@ export default function App() {
                           <p className="text-xs text-slate-500">Pehle column ke pehchan ke sath data grid visualization</p>
                         </div>
                         <div className="flex items-center gap-2">
+                          {undoStack.length > 0 && (
+                            <button
+                              id="undo-calc-preview-btn"
+                              onClick={handleUndo}
+                              className="text-xs font-semibold text-slate-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 shadow-sm px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer"
+                              title="Revert last calculation and remove calculated column"
+                            >
+                              <Undo className="w-3.5 h-3.5 text-amber-600" />
+                              <span className="text-amber-800">Undo (واپس کریں)</span>
+                            </button>
+                          )}
                           <button
                             id="export-csv-btn"
                             onClick={exportRawToCSV}
@@ -618,6 +941,15 @@ export default function App() {
                           >
                             <FileDown className="w-3.5 h-3.5 text-slate-500" />
                             <span>Export to CSV</span>
+                          </button>
+                          <button
+                            id="print-data-btn"
+                            onClick={handlePrintData}
+                            className="text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 shadow-sm px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer"
+                            title="Print preview or save as PDF the entire spreadsheet data"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Print Report</span>
                           </button>
                           <span className="text-xs font-mono bg-slate-100 text-slate-600 px-2.5 py-1.5 rounded-md border border-slate-200">
                             Total Rows: {uploadedSheet.rows.length}
@@ -779,24 +1111,37 @@ export default function App() {
                       />
                     </div>
 
-                    {/* ANALYZE BUTTON */}
-                    <button
-                      onClick={handleAnalyzeQuery}
-                      disabled={!uploadedSheet || !query.trim() || isAnalyzing}
-                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:cursor-not-allowed text-white rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition"
-                    >
-                      {isAnalyzing ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>AI is Analyzing Columns...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Calculator className="w-4 h-4" />
-                          <span>Calculate with Formula</span>
-                        </>
-                      )}
-                    </button>
+                    {/* ANALYZE & UNDO BUTTON ACTION GROUP */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleAnalyzeQuery}
+                        disabled={!uploadedSheet || !query.trim() || isAnalyzing}
+                        className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:cursor-not-allowed text-white rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition"
+                      >
+                        {isAnalyzing ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                            <span>Analyzing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Calculator className="w-4 h-4" />
+                            <span>Calculate</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        id="undo-calc-btn"
+                        onClick={handleUndo}
+                        disabled={undoStack.length === 0 || isAnalyzing}
+                        className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:bg-slate-100/50 disabled:text-slate-400 disabled:cursor-not-allowed text-slate-700 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition"
+                        title="Revert the last calculation or query submission"
+                      >
+                        <Undo className="w-4 h-4" />
+                        <span>Undo ({undoStack.length})</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* API KEY WARNING WARNING */}
@@ -958,6 +1303,29 @@ export default function App() {
               exit={{ opacity: 0, y: -15 }}
               className="space-y-6"
             >
+              {/* BACK TO MAIN PAGE NAVIGATION BAR */}
+              <div className="bg-white border border-slate-200 rounded-xl p-3 px-4 flex items-center justify-between shadow-xs">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setActiveTab('engine')}
+                    className="flex items-center gap-2 text-xs font-semibold text-slate-700 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-100 rounded-lg px-3 py-1.5 transition cursor-pointer"
+                    title="Go back to the main AI calculation dashboard"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>← Back to AI Formula Engine (مین پیج)</span>
+                  </button>
+                  <div className="h-4 w-[1px] bg-slate-200"></div>
+                  <span className="text-xs text-slate-500 font-medium hidden sm:inline">
+                    Aap is waqt <strong>Report Templates</strong> par hain.
+                  </span>
+                </div>
+                <button
+                  onClick={() => setActiveTab('engine')}
+                  className="text-xs font-bold text-indigo-600 hover:underline transition cursor-pointer"
+                >
+                  Go to Main Page
+                </button>
+              </div>
               
               {/* HERO BLOCK */}
               <div className="bg-slate-900 text-white rounded-2xl p-6 sm:p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-xs">
@@ -1194,6 +1562,29 @@ export default function App() {
               exit={{ opacity: 0, y: -15 }}
               className="space-y-6"
             >
+              {/* BACK TO MAIN PAGE NAVIGATION BAR */}
+              <div className="bg-white border border-slate-200 rounded-xl p-3 px-4 flex items-center justify-between shadow-xs">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setActiveTab('engine')}
+                    className="flex items-center gap-2 text-xs font-semibold text-slate-700 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-100 rounded-lg px-3 py-1.5 transition cursor-pointer"
+                    title="Go back to the main AI calculation dashboard"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>← Back to AI Formula Engine (مین پیج)</span>
+                  </button>
+                  <div className="h-4 w-[1px] bg-slate-200"></div>
+                  <span className="text-xs text-slate-500 font-medium hidden sm:inline">
+                    Aap is waqt <strong>Formula Learning Hub</strong> par hain.
+                  </span>
+                </div>
+                <button
+                  onClick={() => setActiveTab('engine')}
+                  className="text-xs font-bold text-indigo-600 hover:underline transition cursor-pointer"
+                >
+                  Go to Main Page
+                </button>
+              </div>
               
               {/* HERO HEADER */}
               <div className="bg-emerald-950 text-white rounded-2xl p-6 sm:p-8 flex items-center justify-between overflow-hidden relative shadow-md">
